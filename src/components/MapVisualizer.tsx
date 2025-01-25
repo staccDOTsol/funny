@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Loader } from '@googlemaps/js-api-loader';
 import { MapFact } from '@/types';
 
@@ -13,7 +13,8 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
   const markersRef = useRef<google.maps.Marker[]>([]);
-  const polygonsRef = useRef<google.maps.Polygon[]>([]);
+  const polygonsRef = useRef<Array<google.maps.Polygon | google.maps.Circle>>([]);
+  const [isInfoExpanded, setIsInfoExpanded] = useState(false);
 
   const fitBoundsWithPadding = (map: google.maps.Map, bounds: google.maps.LatLngBounds) => {
     const ne = bounds.getNorthEast();
@@ -98,11 +99,61 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
         for (const region of fact.regions) {
           try {
             await new Promise<void>((resolve, reject) => {
-              geocoder.geocode({ address: region.name }, (results, status) => {
-                if (status === 'OK' && results && results[0]) {
-                  const result = results[0];
-                  const viewport = result.geometry.viewport;
-                  bounds.union(viewport);
+              // Use coordinates if provided, otherwise geocode
+              if (region.coordinates) {
+                const location = new google.maps.LatLng(
+                  region.coordinates.lat,
+                  region.coordinates.lng
+                );
+                const viewport = new google.maps.LatLngBounds(
+                  new google.maps.LatLng(
+                    region.coordinates.lat - 0.5,
+                    region.coordinates.lng - 0.5
+                  ),
+                  new google.maps.LatLng(
+                    region.coordinates.lat + 0.5,
+                    region.coordinates.lng + 0.5
+                  )
+                );
+                
+                // Create a circular polygon for coordinate-based regions
+                const circle = new google.maps.Circle({
+                  strokeColor: region.color,
+                  strokeOpacity: 0.8,
+                  strokeWeight: 2,
+                  fillColor: region.color,
+                  fillOpacity: 0.35,
+                  center: location,
+                  radius: 50000, // 50km radius
+                  map
+                });
+                
+                polygonsRef.current.push(circle);
+                bounds.union(viewport);
+
+                // Add marker with value label
+                const marker = new google.maps.Marker({
+                  position: location,
+                  map,
+                  label: {
+                    text: `${region.value}`,
+                    color: '#000000',
+                    fontSize: '14px',
+                    fontWeight: 'bold'
+                  },
+                  icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 0,
+                  }
+                });
+                markersRef.current.push(marker);
+                resolve();
+              } else {
+                geocoder.geocode({ address: region.name }, (results, status) => {
+                  if (status === 'OK' && results && results[0]) {
+                    const result = results[0];
+                    const viewport = result.geometry.viewport;
+                    bounds.union(viewport);
 
                   // Create a polygon for the region
                   const path = [
@@ -164,8 +215,9 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
                   reject(new Error(`Geocoding failed: ${status}`));
                 }
               });
-            });
-          } catch (error) {
+            }
+          })
+          } catch (error) { 
             console.error(`Error processing region ${region.name}:`, error);
           }
         }
@@ -202,22 +254,53 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
   }
 
   return (
-    <div className="relative w-full h-[600px] bg-gray-100">
+    <div className="relative w-full h-[400px] md:h-[600px] bg-gray-100">
       <div ref={mapRef} className="absolute inset-0" />
-      <div className="absolute top-4 left-4 bg-white p-4 rounded-lg shadow-lg max-w-md z-10">
-        <h2 className="text-xl font-bold mb-2">{fact.title}</h2>
-        <p className="text-gray-700 mb-2">{fact.description}</p>
-        <p className="text-sm text-gray-500 italic">Click on any region to zoom in</p>
+      <div 
+        className={`absolute transition-all duration-300 ease-in-out
+          ${isInfoExpanded 
+            ? 'top-4 left-4 right-4 bg-white p-3 rounded-lg shadow-lg z-10' 
+            : 'top-4 left-4 right-4 bg-white/90 p-2 rounded-lg shadow-lg z-10 md:bg-white md:p-3 md:right-auto md:max-w-md'
+          }`}
+        onClick={() => setIsInfoExpanded(!isInfoExpanded)}
+      >
+        <div className="flex items-center justify-between md:block">
+          <h2 className="text-lg md:text-xl font-bold truncate">{fact.title}</h2>
+          <button 
+            className="md:hidden"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsInfoExpanded(!isInfoExpanded);
+            }}
+          >
+            {isInfoExpanded ? '▼' : '▲'}
+          </button>
+        </div>
+        <div className={`${isInfoExpanded ? 'block mt-2' : 'hidden md:block md:mt-2'}`}>
+          <p className="text-sm md:text-base text-gray-700 mb-1 md:mb-2">{fact.description}</p>
+          <p className="text-xs md:text-sm text-gray-500 italic">Click on any region to zoom in</p>
+        </div>
       </div>
       <button
         onClick={() => {
           if (mapInstanceRef.current) {
             const bounds = new google.maps.LatLngBounds();
             polygonsRef.current.forEach(polygon => {
-              const path = polygon.getPath();
-              path.forEach(latLng => {
-                bounds.extend(latLng);
-              });
+              if (polygon instanceof google.maps.Polygon) {
+                const path = polygon.getPath();
+                path.forEach((latLng: google.maps.LatLng) => {
+                  bounds.extend(latLng);
+                });
+              } else if (polygon instanceof google.maps.Circle) {
+                const center = polygon.getCenter();
+                const radius = polygon.getRadius();
+                if (center) {
+                  const circleBounds = polygon.getBounds();
+                  if (circleBounds) {
+                    bounds.union(circleBounds);
+                  } 
+                }
+              }
             });
             // Reset all polygons
             polygonsRef.current.forEach(polygon => {
@@ -229,9 +312,149 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
             fitBoundsWithPadding(mapInstanceRef.current, bounds);
           }
         }}
-        className="absolute bottom-4 right-4 bg-white px-4 py-2 rounded-lg shadow-lg z-10 hover:bg-gray-50"
+        className="absolute bottom-4 right-4 bg-white px-3 py-1.5 md:px-4 md:py-2 text-sm md:text-base rounded-lg shadow-lg z-10 hover:bg-gray-50"
       >
         Reset Zoom
+      </button>
+      <button
+        onClick={async () => {
+          if (!mapInstanceRef.current) return;
+          
+          const map = mapInstanceRef.current;
+          const mapCanvas = document.createElement('canvas');
+          const mapDiv = mapRef.current;
+          
+          if (!mapDiv) return;
+          
+          // Set canvas dimensions
+          mapCanvas.width = mapDiv.offsetWidth;
+          mapCanvas.height = mapDiv.offsetHeight;
+          const context = mapCanvas.getContext('2d');
+          
+          if (!context) return;
+          
+          // Create overlay for capturing map content
+          const overlay = new google.maps.OverlayView();
+          overlay.onAdd = () => {};
+          overlay.onRemove = () => {};
+          
+          overlay.draw = () => {
+            const projection = overlay.getProjection();
+            if (!projection) return;
+            
+            // Get map bounds
+            const bounds = map.getBounds();
+            if (!bounds) return;
+            
+            // Convert bounds to canvas coordinates
+            const ne = bounds.getNorthEast();
+            const sw = bounds.getSouthWest();
+            
+            const nePx = projection.fromLatLngToDivPixel(ne);
+            const swPx = projection.fromLatLngToDivPixel(sw);
+            
+            if (!nePx || !swPx) return;
+            
+            // Clear canvas
+            context.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+            
+            // Draw map tiles
+            const mapTiles = mapDiv.querySelectorAll('canvas');
+            mapTiles.forEach(tile => {
+              if (tile instanceof HTMLCanvasElement) {
+                context.drawImage(
+                  tile,
+                  swPx.x,
+                  swPx.y,
+                  nePx.x - swPx.x,
+                  nePx.y - swPx.y,
+                  0,
+                  0,
+                  mapCanvas.width,
+                  mapCanvas.height
+                );
+              }
+            });
+            
+            // Draw overlays (markers, polygons)
+            markersRef.current.forEach(marker => {
+              const position = marker.getPosition();
+              if (position) {
+                const point = projection.fromLatLngToDivPixel(position);
+                if (point) {
+                  context.fillStyle = '#000000';
+                  context.beginPath();
+                  context.arc(point.x - swPx.x, point.y - swPx.y, 5, 0, 2 * Math.PI);
+                  context.fill();
+                }
+              }
+            });
+            
+            polygonsRef.current.forEach(polygon => {
+              if (polygon instanceof google.maps.Polygon) {
+                const path = polygon.getPath();
+                context.beginPath();
+                path.forEach((latLng: google.maps.LatLng, i: number) => {
+                  const point = projection.fromLatLngToDivPixel(latLng);
+                  if (point) {
+                    if (i === 0) {
+                      context.moveTo(point.x - swPx.x, point.y - swPx.y);
+                    } else {
+                      context.lineTo(point.x - swPx.x, point.y - swPx.y);
+                    }
+                  }
+                });
+                context.closePath();
+                
+                // Apply polygon styles
+                context.strokeStyle = polygon.get('strokeColor') as string;
+                context.lineWidth = polygon.get('strokeWeight') as number;
+                context.fillStyle = polygon.get('fillColor') as string;
+                context.globalAlpha = polygon.get('fillOpacity') as number;
+                context.fill();
+                context.stroke();
+                
+              } else if (polygon instanceof google.maps.Circle) {
+                const center = polygon.getCenter();
+                const radius = polygon.getRadius();
+                if (center) {
+                  context.beginPath();
+                  const centerPoint = projection.fromLatLngToDivPixel(center);
+                  if (centerPoint) {
+                    // Draw circle
+                    context.arc(
+                      centerPoint.x - swPx.x,
+                      centerPoint.y - swPx.y,
+                      radius / 111319.9, // Approximate meters to degrees
+                      0,
+                      2 * Math.PI
+                    );
+                    
+                    // Apply circle styles
+                    context.strokeStyle = polygon.get('strokeColor') as string;
+                    context.lineWidth = polygon.get('strokeWeight') as number;
+                    context.fillStyle = polygon.get('fillColor') as string;
+                    context.globalAlpha = polygon.get('fillOpacity') as number;
+                    context.fill();
+                    context.stroke();
+                  }
+                }
+              }
+            });
+            
+            // Convert to data URL and trigger download
+            const dataUrl = mapCanvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = `map-${Date.now()}.png`;
+            link.href = dataUrl;
+            link.click();
+          };
+          
+          overlay.setMap(map);
+        }}
+        className="absolute bottom-16 md:bottom-20 right-4 bg-white px-3 py-1.5 md:px-4 md:py-2 text-sm md:text-base rounded-lg shadow-lg z-10 hover:bg-gray-50"
+      >
+        Export Map
       </button>
     </div>
   );

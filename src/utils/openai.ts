@@ -4,15 +4,21 @@ const openai = new OpenAI({
   apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
 });
 
-export async function generateMapFact(region?: string): Promise<{
+export interface MapFact {
   title: string;
   description: string;
   regions: Array<{
     name: string;
     value: string;
     color: string;
+    coordinates?: {
+      lat: number;
+      lng: number;
+    };
   }>;
-}> {
+}
+
+export async function generateMapFact(region?: string): Promise<MapFact> {
     const topics = [
       "Ancient trade routes and their modern economic impact",
       "Unique local superstitions and folklore",

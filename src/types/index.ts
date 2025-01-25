@@ -1,9 +1,15 @@
+export interface Coordinates {
+  lat: number;
+  lng: number;
+}
+
 export interface MapFact {
   title: string;
   description: string;
-  regions: Array<{
+  regions: {
     name: string;
     value: string;
     color: string;
-  }>;
+    coordinates?: Coordinates;
+  }[];
 }
