@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.NEXT_PUBLIC_OPENAI_API_KEY,
 });
 
 export async function generateMapFact(): Promise<{
@@ -40,7 +40,6 @@ export async function generateMapFact(): Promise<{
   const prompt = `Generate an interesting and factual map visualization about a specific region or country. Choose an unexpected combination of topic and region from these suggestions (but you can use others too):
 
 Topics: ${topics.join(', ')}
-Regions: 
 
 The fact should be:
 1. Based on real, verifiable data or historical records
@@ -83,7 +82,7 @@ Example:
 Generate a new, different fact that reveals an unexpected pattern or connection about a region and topic not shown in the example.`;
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4",
+    model: "gpt-4o",
     messages: [
       {
         role: "system",
