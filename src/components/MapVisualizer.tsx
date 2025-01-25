@@ -12,7 +12,39 @@ interface MapVisualizerProps {
 export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const geocoder = useRef<google.maps.Geocoder | null>(null);
+  const markersRef = useRef<google.maps.Marker[]>([]);
+  const polygonsRef = useRef<google.maps.Polygon[]>([]);
+
+  const fitBoundsWithPadding = (map: google.maps.Map, bounds: google.maps.LatLngBounds) => {
+    const ne = bounds.getNorthEast();
+    const sw = bounds.getSouthWest();
+    const latSpan = ne.lat() - sw.lat();
+    const lngSpan = ne.lng() - sw.lng();
+    
+    // Add dynamic padding based on region size
+    const padding = Math.min(0.3, Math.max(0.1, 1 / Math.max(latSpan, lngSpan)));
+    const newBounds = new google.maps.LatLngBounds(
+      new google.maps.LatLng(sw.lat() - latSpan * padding, sw.lng() - lngSpan * padding),
+      new google.maps.LatLng(ne.lat() + latSpan * padding, ne.lng() + lngSpan * padding)
+    );
+
+    map.fitBounds(newBounds);
+    
+    // Adjust final zoom based on region size
+    const zoomLevel = map.getZoom();
+    if (zoomLevel) {
+      const optimalZoom = Math.min(
+        10,
+        Math.max(
+          4,
+          Math.floor(Math.log2(360 / Math.max(latSpan, lngSpan))) + 1
+        )
+      );
+      if (zoomLevel > optimalZoom) {
+        map.setZoom(optimalZoom);
+      }
+    }
+  };
 
   useEffect(() => {
     const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -30,170 +62,134 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
     async function initMap() {
       try {
         const google = await loader.load();
-        geocoder.current = new google.maps.Geocoder();
+        if (!mapRef.current) return;
 
-        const map = new google.maps.Map(mapRef.current!, {
+        const map = new google.maps.Map(mapRef.current, {
           mapTypeControl: false,
           streetViewControl: false,
           fullscreenControl: true,
+          maxZoom: 12,
+          minZoom: 2,
+          zoomControl: true,
           styles: [
             {
               featureType: "all",
-              elementType: "labels.text",
-              stylers: [{ visibility: "on" }]
-            },
-            {
-              featureType: "administrative.locality",
               elementType: "labels",
-              stylers: [{ visibility: "on" }]
-            },
-            {
-              featureType: "administrative.neighborhood",
-              elementType: "labels",
-              stylers: [{ visibility: "on" }]
-            },
-            {
-              featureType: "administrative.province",
-              elementType: "geometry.stroke",
-              stylers: [{ visibility: "on", weight: 1 }]
-            },
-            {
-              featureType: "landscape",
-              elementType: "geometry",
-              stylers: [{ visibility: "on", saturation: -50 }]
+              stylers: [{ visibility: "off" }]
             },
             {
               featureType: "water",
               elementType: "geometry",
               stylers: [{ color: "#e9e9e9" }]
+            },
+            {
+              featureType: "landscape",
+              elementType: "geometry",
+              stylers: [{ color: "#f5f5f5" }]
             }
-          ],
-          minZoom: 3
+          ]
         });
 
         mapInstanceRef.current = map;
-        
         const bounds = new google.maps.LatLngBounds();
+        const geocoder = new google.maps.Geocoder();
         
-        // Visualize the data and collect bounds
+        // Process each region
         for (const region of fact.regions) {
-          const regionBounds = await visualizeRegion(region, map);
-          if (regionBounds) {
-            bounds.union(regionBounds);
+          try {
+            await new Promise<void>((resolve, reject) => {
+              geocoder.geocode({ address: region.name }, (results, status) => {
+                if (status === 'OK' && results && results[0]) {
+                  const result = results[0];
+                  const viewport = result.geometry.viewport;
+                  bounds.union(viewport);
+
+                  // Create a polygon for the region
+                  const path = [
+                    { lat: viewport.getNorthEast().lat(), lng: viewport.getNorthEast().lng() },
+                    { lat: viewport.getNorthEast().lat(), lng: viewport.getSouthWest().lng() },
+                    { lat: viewport.getSouthWest().lat(), lng: viewport.getSouthWest().lng() },
+                    { lat: viewport.getSouthWest().lat(), lng: viewport.getNorthEast().lng() }
+                  ];
+
+                  const polygon = new google.maps.Polygon({
+                    paths: path,
+                    strokeColor: region.color,
+                    strokeOpacity: 0.8,
+                    strokeWeight: 2,
+                    fillColor: region.color,
+                    fillOpacity: 0.35,
+                    map
+                  });
+
+                  polygonsRef.current.push(polygon);
+
+                  // Add click handler
+                  polygon.addListener('click', () => {
+                    // Reset all polygons
+                    polygonsRef.current.forEach(p => {
+                      p.setOptions({
+                        fillOpacity: 0.35,
+                        strokeWeight: 2
+                      });
+                    });
+                    
+                    // Highlight clicked polygon
+                    polygon.setOptions({
+                      fillOpacity: 0.6,
+                      strokeWeight: 3
+                    });
+
+                    fitBoundsWithPadding(map, viewport);
+                  });
+
+                  // Add label
+                  const marker = new google.maps.Marker({
+                    position: result.geometry.location,
+                    map,
+                    label: {
+                      text: `${region.name}\n${region.value}`,
+                      color: '#000000',
+                      fontSize: '12px',
+                      fontWeight: 'bold'
+                    },
+                    icon: {
+                      path: google.maps.SymbolPath.CIRCLE,
+                      scale: 0,
+                    }
+                  });
+                  markersRef.current.push(marker);
+                  resolve();
+                } else {
+                  reject(new Error(`Geocoding failed: ${status}`));
+                }
+              });
+            });
+          } catch (error) {
+            console.error(`Error processing region ${region.name}:`, error);
           }
         }
 
-        // Fit map to all regions with padding
-        map.fitBounds(bounds);
-        // Add some padding by extending the bounds
-        const ne = bounds.getNorthEast();
-        const sw = bounds.getSouthWest();
-        const latPadding = (ne.lat() - sw.lat()) * 0.1;
-        const lngPadding = (ne.lng() - sw.lng()) * 0.1;
-        bounds.extend(new google.maps.LatLng(ne.lat() + latPadding, ne.lng() + lngPadding));
-        bounds.extend(new google.maps.LatLng(sw.lat() - latPadding, sw.lng() - lngPadding));
-        map.fitBounds(bounds);
-
-        onMapReady?.();
+        // Initial view after a short delay to allow features to load
+        setTimeout(() => {
+          fitBoundsWithPadding(map, bounds);
+          onMapReady?.();
+        }, 1000);
       } catch (error) {
         console.error('Error initializing map:', error);
       }
     }
 
-    if (mapRef.current) {
-      initMap();
-    }
+    initMap();
+
+    // Cleanup
+    return () => {
+      markersRef.current.forEach(marker => marker.setMap(null));
+      markersRef.current = [];
+      polygonsRef.current.forEach(polygon => polygon.setMap(null));
+      polygonsRef.current = [];
+    };
   }, [fact, onMapReady]);
-
-  const visualizeRegion = async (
-    region: MapFact['regions'][0],
-    map: google.maps.Map
-  ) => {
-    return new Promise<google.maps.LatLngBounds | null>((resolve) => {
-      if (!geocoder.current) return resolve(null);
-
-      geocoder.current.geocode({ address: region.name }, (results, status) => {
-        if (status === 'OK' && results?.[0]?.geometry) {
-          const bounds = results[0].geometry.viewport || results[0].geometry.bounds;
-          
-          if (bounds) {
-            // Create polygon for the region
-            const paths = getPolygonPathsFromBounds(bounds);
-            const polygon = new google.maps.Polygon({
-              paths,
-              strokeColor: region.color,
-              strokeOpacity: 0.8,
-              strokeWeight: 2,
-              fillColor: region.color,
-              fillOpacity: 0.35,
-              map
-            });
-
-            // Add click handler to zoom to region
-            polygon.addListener('click', () => {
-              map.fitBounds(bounds);
-              // Add padding by extending the bounds
-              const ne = bounds.getNorthEast();
-              const sw = bounds.getSouthWest();
-              const latPadding = (ne.lat() - sw.lat()) * 0.1;
-              const lngPadding = (ne.lng() - sw.lng()) * 0.1;
-              const paddedBounds = new google.maps.LatLngBounds();
-              paddedBounds.extend(new google.maps.LatLng(ne.lat() + latPadding, ne.lng() + lngPadding));
-              paddedBounds.extend(new google.maps.LatLng(sw.lat() - latPadding, sw.lng() - lngPadding));
-              map.fitBounds(paddedBounds);
-            });
-
-            // Add label
-            const marker = new google.maps.Marker({
-              position: bounds.getCenter(),
-              map,
-              label: {
-                text: `${region.name}\n${region.value}`,
-                color: '#000000',
-                fontSize: '12px',
-                fontWeight: 'bold'
-              },
-              icon: {
-                path: google.maps.SymbolPath.CIRCLE,
-                scale: 0,
-              }
-            });
-
-            marker.addListener('click', () => {
-              map.fitBounds(bounds);
-              // Add padding by extending the bounds
-              const ne = bounds.getNorthEast();
-              const sw = bounds.getSouthWest();
-              const latPadding = (ne.lat() - sw.lat()) * 0.1;
-              const lngPadding = (ne.lng() - sw.lng()) * 0.1;
-              const paddedBounds = new google.maps.LatLngBounds();
-              paddedBounds.extend(new google.maps.LatLng(ne.lat() + latPadding, ne.lng() + lngPadding));
-              paddedBounds.extend(new google.maps.LatLng(sw.lat() - latPadding, sw.lng() - lngPadding));
-              map.fitBounds(paddedBounds);
-            });
-
-            resolve(bounds);
-            return;
-          }
-        }
-        resolve(null);
-      });
-    });
-  };
-
-  const getPolygonPathsFromBounds = (
-    bounds: google.maps.LatLngBounds
-  ): google.maps.LatLngLiteral[] => {
-    const ne = bounds.getNorthEast();
-    const sw = bounds.getSouthWest();
-    
-    return [
-      { lat: ne.lat(), lng: ne.lng() },
-      { lat: ne.lat(), lng: sw.lng() },
-      { lat: sw.lat(), lng: sw.lng() },
-      { lat: sw.lat(), lng: ne.lng() }
-    ];
-  };
 
   if (!process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) {
     return (
@@ -217,14 +213,20 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
         onClick={() => {
           if (mapInstanceRef.current) {
             const bounds = new google.maps.LatLngBounds();
-            fact.regions.forEach(region => {
-              geocoder.current?.geocode({ address: region.name }, (results, status) => {
-                if (status === 'OK' && results?.[0]?.geometry?.viewport) {
-                  bounds.union(results[0].geometry.viewport);
-                  mapInstanceRef.current?.fitBounds(bounds);
-                }
+            polygonsRef.current.forEach(polygon => {
+              const path = polygon.getPath();
+              path.forEach(latLng => {
+                bounds.extend(latLng);
               });
             });
+            // Reset all polygons
+            polygonsRef.current.forEach(polygon => {
+              polygon.setOptions({
+                fillOpacity: 0.35,
+                strokeWeight: 2
+              });
+            });
+            fitBoundsWithPadding(mapInstanceRef.current, bounds);
           }
         }}
         className="absolute bottom-4 right-4 bg-white px-4 py-2 rounded-lg shadow-lg z-10 hover:bg-gray-50"
