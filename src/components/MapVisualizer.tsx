@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Loader } from '@googlemaps/js-api-loader';
 import GoogleAuth from './GoogleAuth';
 import { getLocationHistory, getVisitedPlaces } from '@/utils/google';
@@ -9,6 +9,18 @@ interface VisitedArea {
   lat: number;
   lng: number;
   radius: number;
+}
+
+function debounce<T extends (...args: any[]) => any>(
+  func: T,
+  wait: number
+): (...args: Parameters<T>) => void {
+  let timeout: NodeJS.Timeout | null = null;
+  
+  return (...args: Parameters<T>) => {
+    if (timeout) clearTimeout(timeout);
+    timeout = setTimeout(() => func(...args), wait);
+  };
 }
 
 export default function MapVisualizer() {
@@ -22,6 +34,9 @@ export default function MapVisualizer() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const fogRef = useRef<SVGRectElement>(null);
 
+  // Cache for fog calculations
+  const fogCache = useRef(new Map<string, google.maps.LatLng[]>());
+
   const handleAuthSuccess = (token: string) => {
     setAccessToken(token);
     setIsAuthenticated(true);
@@ -34,7 +49,6 @@ export default function MapVisualizer() {
       existingFog.remove();
     }
 
-    // Create a canvas for the fog
     const canvas = document.createElement('canvas');
     canvas.className = 'fog-overlay';
     canvas.style.cssText = `
@@ -48,7 +62,6 @@ export default function MapVisualizer() {
     const ctx = canvas.getContext('2d');
     if (!ctx || !mapInstanceRef.current) return;
 
-    // Set canvas size to match map
     canvas.width = mapRef.current?.clientWidth || 0;
     canvas.height = mapRef.current?.clientHeight || 0;
 
@@ -56,42 +69,41 @@ export default function MapVisualizer() {
     ctx.fillStyle = 'rgba(50, 50, 50, 0.95)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Clear circles where visited - with smaller, more frequent circles
+    // Faster animation - reduce delay between points
     ctx.globalCompositeOperation = 'destination-out';
-    locations.forEach(location => {
-      // Create multiple circles around each location point
-      for (let i = -2; i <= 2; i++) {
-        for (let j = -2; j <= 2; j++) {
-          const offset = new google.maps.LatLng(
-            location.lat() + i * 0.001, // Small offset in latitude
-            location.lng() + j * 0.001  // Small offset in longitude
-          );
-          
-          const point = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(offset);
-          const bounds = mapInstanceRef.current?.getBounds();
-          if (point && bounds) {
-            const ne = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getNorthEast());
-            const sw = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getSouthWest());
-            if (ne && sw) {
-              const x = (point.x - sw.x) / (ne.x - sw.x) * canvas.width;
-              const y = (point.y - ne.y) / (sw.y - ne.y) * canvas.height;
-              
-              // Smaller base radius and adjusted zoom scaling
-              const zoom = mapInstanceRef.current?.getZoom() || 0;
-              const baseRadius = 10; // Much smaller base radius
-              const radius = Math.pow(1.5, zoom - 10) * baseRadius;
+    locations.forEach((location, index) => {
+      setTimeout(() => {
+        const point = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(location);
+        const bounds = mapInstanceRef.current?.getBounds();
+        if (point && bounds) {
+          const ne = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getNorthEast());
+          const sw = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getSouthWest());
+          if (ne && sw) {
+            const x = (point.x - sw.x) / (ne.x - sw.x) * canvas.width;
+            const y = (point.y - ne.y) / (sw.y - ne.y) * canvas.height;
+            
+            const zoom = mapInstanceRef.current?.getZoom() || 0;
+            const baseRadius = 20;
+            const radius = Math.pow(1.5, zoom - 10) * baseRadius;
 
-              ctx.beginPath();
-              ctx.arc(x, y, radius, 0, Math.PI * 2);
-              ctx.fill();
-            }
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
           }
         }
-      }
+      }, index * 20); // Reduced from 100ms to 20ms
     });
 
     mapRef.current?.appendChild(canvas);
   };
+
+  // Debounced update function
+  const debouncedUpdateFog = useCallback(
+    debounce((locations: google.maps.LatLng[]) => {
+      updateFogMask(locations);
+    }, 100),
+    []
+  );
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -213,19 +225,37 @@ export default function MapVisualizer() {
           }
         }
 
-        // Add zoom_changed listener to update fog
-        mapInstanceRef.current?.addListener('zoom_changed', () => {
+        // Add handlers for map movement
+        mapInstanceRef.current?.addListener('drag', () => {
           if (accessToken) {
-            getLocationHistory(accessToken).then(history => {
-              if (history && Array.isArray(history)) {
-                const locations = history.map((point: { lat: number; lng: number; }) => 
-                  new google.maps.LatLng(point.lat, point.lng)
-                );
-                updateFogMask(locations);
-              }
-            });
+            const cachedLocations = fogCache.current.get(accessToken);
+            if (cachedLocations) {
+              debouncedUpdateFog(cachedLocations);
+            }
           }
         });
+
+        mapInstanceRef.current?.addListener('zoom_changed', () => {
+          if (accessToken) {
+            const cachedLocations = fogCache.current.get(accessToken);
+            if (cachedLocations) {
+              debouncedUpdateFog(cachedLocations);
+            }
+          }
+        });
+
+        // Cache locations when we get them
+        if (accessToken) {
+          getLocationHistory(accessToken).then(history => {
+            if (history && Array.isArray(history)) {
+              const locations = history.map((point: { lat: number; lng: number; }) => 
+                new google.maps.LatLng(point.lat, point.lng)
+              );
+              fogCache.current.set(accessToken, locations);
+              updateFogMask(locations);
+            }
+          });
+        }
 
       } catch (error) {
         console.error('Error initializing map:', error);
@@ -239,7 +269,7 @@ export default function MapVisualizer() {
         pathRef.current.setMap(null);
       }
     };
-  }, [isAuthenticated, accessToken]);
+  }, [isAuthenticated, accessToken, debouncedUpdateFog]);
 
   if (!process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) {
     return (

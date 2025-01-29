@@ -30,7 +30,8 @@ export default function GoogleAuth({ onAuthSuccess }: GoogleAuthProps) {
       const oauthClient = window.google.accounts.oauth2.initTokenClient({
         client_id: clientId,
         scope: [
-          'https://www.googleapis.com/auth/userinfo.profile'
+          'https://www.googleapis.com/auth/userinfo.profile',
+          'https://www.googleapis.com/auth/calendar.readonly'
         ].join(' '),
         callback: (response) => {
           if (response.access_token) {

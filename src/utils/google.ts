@@ -82,31 +82,106 @@ export async function getVisitedPlaces(map: google.maps.Map, locationHistory: Ar
   });
 }
 
-interface LocationData {
+interface StoredLocation {
   lat: number;
   lng: number;
-  timestamp: string;
+  timestamp: number;
 }
 
 export async function getLocationHistory(accessToken: string) {
-  return new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      console.error('Geolocation is not supported');
-      resolve([]);
-      return;
+  try {
+    // Get stored locations from localStorage
+    const storedLocations: StoredLocation[] = JSON.parse(
+      localStorage.getItem('locationHistory') || '[]'
+    );
+
+    // Get current location
+    const currentLocation = await new Promise<StoredLocation>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const newLocation = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            timestamp: Date.now()
+          };
+          resolve(newLocation);
+        },
+        (error) => reject(error)
+      );
+    });
+
+    // Add current location if it's significantly different from last stored
+    const lastStored = storedLocations[storedLocations.length - 1];
+    if (!lastStored || 
+        Math.abs(lastStored.lat - currentLocation.lat) > 0.001 || 
+        Math.abs(lastStored.lng - currentLocation.lng) > 0.001) {
+      storedLocations.push(currentLocation);
+      localStorage.setItem('locationHistory', JSON.stringify(storedLocations));
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        resolve([{
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        }]);
-      },
-      (error) => {
-        console.error('Error getting location:', error);
-        resolve([]);
+    // Get calendar events with locations
+    const response = await fetch(
+      'https://www.googleapis.com/calendar/v3/calendars/primary/events?' +
+      'maxResults=2500&' +
+      'orderBy=startTime&' +
+      'singleEvents=true&' +
+      'timeMin=2020-01-01T00:00:00Z',
+      {
+        headers: {
+          'Authorization': `Bearer ${accessToken}`
+        }
       }
     );
-  });
+
+    if (!response.ok) {
+      throw new Error('Failed to fetch calendar data');
+    }
+
+    const data = await response.json();
+
+    // Extract and geocode calendar locations
+    const calendarLocations = await Promise.all(
+      data.items
+        .filter((event: any) => event.location)
+        .map(async (event: any) => {
+          const geocodeResponse = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(event.location)}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`
+          );
+          const geocodeData = await geocodeResponse.json();
+          
+          if (geocodeData.results?.[0]?.geometry?.location) {
+            return {
+              ...geocodeData.results[0].geometry.location,
+              timestamp: new Date(event.start.dateTime || event.start.date).getTime()
+            };
+          }
+          return null;
+        })
+    );
+
+    // Combine all locations and sort by timestamp
+    const allLocations = [...storedLocations, ...calendarLocations.filter(Boolean)]
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .map(loc => ({
+        lat: loc.lat,
+        lng: loc.lng,
+        isCurrent: false
+      }));
+
+    // Add current location with special flag
+    if (currentLocation) {
+      allLocations.push({
+        lat: currentLocation.lat,
+        lng: currentLocation.lng,
+        isCurrent: true
+      });
+    }
+
+    console.log(`Found ${allLocations.length} total locations`);
+    return allLocations;
+
+  } catch (error) {
+    console.error('Error:', error);
+    return [];
+  }
 }
