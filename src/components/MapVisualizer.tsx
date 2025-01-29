@@ -183,7 +183,7 @@ export default function MapVisualizer() {
           const history = await getLocationHistory(accessToken);
           console.log('Location history fetched:', history);
 
-          if (history && history.length) {
+          if (history && Array.isArray(history)) {
             const locations = history.map((point: { lat: number; lng: number; }) => 
               new google.maps.LatLng(point.lat, point.lng)
             );
@@ -217,7 +217,7 @@ export default function MapVisualizer() {
         mapInstanceRef.current?.addListener('zoom_changed', () => {
           if (accessToken) {
             getLocationHistory(accessToken).then(history => {
-              if (history && history.length) {
+              if (history && Array.isArray(history)) {
                 const locations = history.map((point: { lat: number; lng: number; }) => 
                   new google.maps.LatLng(point.lat, point.lng)
                 );

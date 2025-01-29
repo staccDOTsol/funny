@@ -8,11 +8,11 @@ export default function PrivacyPolicy() {
         <h2>Overview</h2>
         <p>
           This privacy policy describes how we collect, use, and protect your location data when you use our service. 
-          We use Google Fit API to access your location history to create a personalized map visualization.
+          We use Google Maps Platform and Places API to create a personalized map visualization.
         </p>
 
         <h2>Information We Collect</h2>
-        <p>We collect and process the following data through the Google Fit API:</p>
+        <p>We collect and process the following data through the Google Maps Platform:</p>
         <ul>
           <li>Location history data</li>
           <li>Basic profile information</li>
@@ -43,7 +43,7 @@ export default function PrivacyPolicy() {
 
         <h2>Your Rights</h2>
         <p>
-          You can revoke access to your Google Fit data at any time through your 
+          You can revoke access to your Google Maps Platform data at any time through your 
           <a href="https://myaccount.google.com/permissions" className="text-blue-600 hover:underline"> Google Account settings</a>.
         </p>
 

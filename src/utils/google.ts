@@ -89,31 +89,24 @@ interface LocationData {
 }
 
 export async function getLocationHistory(accessToken: string) {
-  try {
-    // Use HTML5 Geolocation API to get current location
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) {
-        console.error('Geolocation is not supported');
-        resolve([]);
-        return;
-      }
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      console.error('Geolocation is not supported');
+      resolve([]);
+      return;
+    }
 
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          // Just return current location for now
-          resolve([{
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          }]);
-        },
-        (error) => {
-          console.error('Error getting location:', error);
-          resolve([]);
-        }
-      );
-    });
-  } catch (error) {
-    console.error('Error:', error);
-    return [];
-  }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve([{
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        }]);
+      },
+      (error) => {
+        console.error('Error getting location:', error);
+        resolve([]);
+      }
+    );
+  });
 }

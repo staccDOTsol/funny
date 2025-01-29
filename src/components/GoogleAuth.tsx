@@ -30,8 +30,7 @@ export default function GoogleAuth({ onAuthSuccess }: GoogleAuthProps) {
       const oauthClient = window.google.accounts.oauth2.initTokenClient({
         client_id: clientId,
         scope: [
-          'https://www.googleapis.com/auth/userinfo.profile',
-          'https://www.googleapis.com/auth/fitness.location.read'
+          'https://www.googleapis.com/auth/userinfo.profile'
         ].join(' '),
         callback: (response) => {
           if (response.access_token) {
