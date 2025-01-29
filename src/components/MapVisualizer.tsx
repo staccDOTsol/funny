@@ -56,25 +56,36 @@ export default function MapVisualizer() {
     ctx.fillStyle = 'rgba(50, 50, 50, 0.95)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Clear circles where visited
+    // Clear circles where visited - with smaller, more frequent circles
     ctx.globalCompositeOperation = 'destination-out';
     locations.forEach(location => {
-      const point = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(location);
-      const bounds = mapInstanceRef.current?.getBounds();
-      if (point && bounds) {
-        const ne = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getNorthEast());
-        const sw = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getSouthWest());
-        if (ne && sw) {
-          const x = (point.x - sw.x) / (ne.x - sw.x) * canvas.width;
-          const y = (point.y - ne.y) / (sw.y - ne.y) * canvas.height;
+      // Create multiple circles around each location point
+      for (let i = -2; i <= 2; i++) {
+        for (let j = -2; j <= 2; j++) {
+          const offset = new google.maps.LatLng(
+            location.lat() + i * 0.001, // Small offset in latitude
+            location.lng() + j * 0.001  // Small offset in longitude
+          );
           
-          // Size based on zoom
-          const zoom = mapInstanceRef.current?.getZoom() || 0;
-          const radius = Math.pow(2, zoom - 7) * 20;
+          const point = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(offset);
+          const bounds = mapInstanceRef.current?.getBounds();
+          if (point && bounds) {
+            const ne = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getNorthEast());
+            const sw = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getSouthWest());
+            if (ne && sw) {
+              const x = (point.x - sw.x) / (ne.x - sw.x) * canvas.width;
+              const y = (point.y - ne.y) / (sw.y - ne.y) * canvas.height;
+              
+              // Smaller base radius and adjusted zoom scaling
+              const zoom = mapInstanceRef.current?.getZoom() || 0;
+              const baseRadius = 10; // Much smaller base radius
+              const radius = Math.pow(1.5, zoom - 10) * baseRadius;
 
-          ctx.beginPath();
-          ctx.arc(x, y, radius, 0, Math.PI * 2);
-          ctx.fill();
+              ctx.beginPath();
+              ctx.arc(x, y, radius, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
         }
       }
     });
@@ -173,7 +184,7 @@ export default function MapVisualizer() {
           console.log('Location history fetched:', history);
 
           if (history && history.length) {
-            const locations = history.map(point => 
+            const locations = history.map((point: { lat: number; lng: number; }) => 
               new google.maps.LatLng(point.lat, point.lng)
             );
 
@@ -207,7 +218,7 @@ export default function MapVisualizer() {
           if (accessToken) {
             getLocationHistory(accessToken).then(history => {
               if (history && history.length) {
-                const locations = history.map(point => 
+                const locations = history.map((point: { lat: number; lng: number; }) => 
                   new google.maps.LatLng(point.lat, point.lng)
                 );
                 updateFogMask(locations);

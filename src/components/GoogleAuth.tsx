@@ -31,8 +31,7 @@ export default function GoogleAuth({ onAuthSuccess }: GoogleAuthProps) {
         client_id: clientId,
         scope: [
           'https://www.googleapis.com/auth/userinfo.profile',
-          'https://www.googleapis.com/auth/calendar.readonly',
-          'https://www.googleapis.com/auth/calendar.events.readonly'
+          'https://www.googleapis.com/auth/fitness.location.read'
         ].join(' '),
         callback: (response) => {
           if (response.access_token) {

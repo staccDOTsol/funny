@@ -89,53 +89,31 @@ interface LocationData {
 }
 
 export async function getLocationHistory(accessToken: string) {
-  console.log('Starting location history fetch with token:', accessToken.substring(0, 10) + '...');
-  
   try {
-    const response = await fetch(
-      'https://www.googleapis.com/calendar/v3/calendars/primary/events?' +
-      'maxResults=2500&' +
-      'orderBy=startTime&' +
-      'singleEvents=true&' +
-      'timeMin=2000-01-01T00:00:00Z',
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+    // Use HTML5 Geolocation API to get current location
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        console.error('Geolocation is not supported');
+        resolve([]);
+        return;
       }
-    );
 
-    if (!response.ok) {
-      console.error('Response status:', response.status);
-      throw new Error('Failed to fetch location history');
-    }
-
-    const data = await response.json();
-
-    // Extract locations from events and geocode them
-    const locations = await Promise.all(
-      data.items
-        .filter((event: any) => event.location)
-        .map(async (event: any) => {
-          const geocodeResponse = await fetch(
-            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(event.location)}&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}`
-          );
-          const geocodeData = await geocodeResponse.json();
-
-          if (geocodeData.results && geocodeData.results[0]) {
-            const { lat, lng } = geocodeData.results[0].geometry.location;
-            return { lat, lng };
-          }
-          return null;
-        })
-    );
-
-    // Filter out any null results from failed geocoding
-    const validLocations = locations.filter(loc => loc !== null);
-    console.log(`Processed ${validLocations.length} locations`);
-    return validLocations;
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          // Just return current location for now
+          resolve([{
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          }]);
+        },
+        (error) => {
+          console.error('Error getting location:', error);
+          resolve([]);
+        }
+      );
+    });
   } catch (error) {
-    console.error('Error fetching location history:', error);
+    console.error('Error:', error);
     return [];
   }
 }
