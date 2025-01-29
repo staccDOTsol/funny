@@ -2,52 +2,89 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Loader } from '@googlemaps/js-api-loader';
-import { MapFact } from '@/types';
+import GoogleAuth from './GoogleAuth';
+import { getLocationHistory, getVisitedPlaces } from '@/utils/google';
 
-interface MapVisualizerProps {
-  fact: MapFact;
-  onMapReady?: () => void;
+interface VisitedArea {
+  lat: number;
+  lng: number;
+  radius: number;
 }
 
-export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) {
+export default function MapVisualizer() {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const markersRef = useRef<google.maps.Marker[]>([]);
-  const polygonsRef = useRef<Array<google.maps.Polygon | google.maps.Circle>>([]);
+  const pathRef = useRef<google.maps.Polyline | null>(null);
+  const searchBoxRef = useRef<google.maps.places.SearchBox | null>(null);
   const [isInfoExpanded, setIsInfoExpanded] = useState(false);
+  const [visitedAreas, setVisitedAreas] = useState<VisitedArea[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const fogRef = useRef<SVGRectElement>(null);
 
-  const fitBoundsWithPadding = (map: google.maps.Map, bounds: google.maps.LatLngBounds) => {
-    const ne = bounds.getNorthEast();
-    const sw = bounds.getSouthWest();
-    const latSpan = ne.lat() - sw.lat();
-    const lngSpan = ne.lng() - sw.lng();
-    
-    // Add dynamic padding based on region size
-    const padding = Math.min(0.3, Math.max(0.1, 1 / Math.max(latSpan, lngSpan)));
-    const newBounds = new google.maps.LatLngBounds(
-      new google.maps.LatLng(sw.lat() - latSpan * padding, sw.lng() - lngSpan * padding),
-      new google.maps.LatLng(ne.lat() + latSpan * padding, ne.lng() + lngSpan * padding)
-    );
+  const handleAuthSuccess = (token: string) => {
+    setAccessToken(token);
+    setIsAuthenticated(true);
+  };
 
-    map.fitBounds(newBounds);
-    
-    // Adjust final zoom based on region size
-    const zoomLevel = map.getZoom();
-    if (zoomLevel) {
-      const optimalZoom = Math.min(
-        10,
-        Math.max(
-          4,
-          Math.floor(Math.log2(360 / Math.max(latSpan, lngSpan))) + 1
-        )
-      );
-      if (zoomLevel > optimalZoom) {
-        map.setZoom(optimalZoom);
-      }
+  const updateFogMask = (locations: google.maps.LatLng[]) => {
+    // Remove any existing fog
+    const existingFog = mapRef.current?.querySelector('.fog-overlay');
+    if (existingFog) {
+      existingFog.remove();
     }
+
+    // Create a canvas for the fog
+    const canvas = document.createElement('canvas');
+    canvas.className = 'fog-overlay';
+    canvas.style.cssText = `
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    `;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx || !mapInstanceRef.current) return;
+
+    // Set canvas size to match map
+    canvas.width = mapRef.current?.clientWidth || 0;
+    canvas.height = mapRef.current?.clientHeight || 0;
+
+    // Fill with dark overlay
+    ctx.fillStyle = 'rgba(50, 50, 50, 0.95)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Clear circles where visited
+    ctx.globalCompositeOperation = 'destination-out';
+    locations.forEach(location => {
+      const point = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(location);
+      const bounds = mapInstanceRef.current?.getBounds();
+      if (point && bounds) {
+        const ne = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getNorthEast());
+        const sw = mapInstanceRef.current?.getProjection()?.fromLatLngToPoint(bounds.getSouthWest());
+        if (ne && sw) {
+          const x = (point.x - sw.x) / (ne.x - sw.x) * canvas.width;
+          const y = (point.y - ne.y) / (sw.y - ne.y) * canvas.height;
+          
+          // Size based on zoom
+          const zoom = mapInstanceRef.current?.getZoom() || 0;
+          const radius = Math.pow(2, zoom - 7) * 20;
+
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    });
+
+    mapRef.current?.appendChild(canvas);
   };
 
   useEffect(() => {
+    if (!isAuthenticated) return;
+
     const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
     if (!apiKey) {
       console.error('Google Maps API key is not configured');
@@ -57,7 +94,7 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
     const loader = new Loader({
       apiKey,
       version: 'weekly',
-      libraries: ['places', 'geometry']
+      libraries: ['places', 'geometry', 'drawing', 'marker'],
     });
 
     async function initMap() {
@@ -65,13 +102,25 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
         const google = await loader.load();
         if (!mapRef.current) return;
 
+        // Create the search box input
+        const input = document.createElement("input");
+        input.placeholder = "Search for places...";
+        input.className = "absolute top-4 left-4 w-64 px-3 py-2 bg-white rounded-lg shadow-lg z-20";
+        mapRef.current.appendChild(input);
+
+        // Initialize the search box
+        const searchBox = new google.maps.places.SearchBox(input);
+        searchBoxRef.current = searchBox;
+
         const map = new google.maps.Map(mapRef.current, {
           mapTypeControl: false,
           streetViewControl: false,
           fullscreenControl: true,
-          maxZoom: 12,
+          maxZoom: 18,
           minZoom: 2,
           zoomControl: true,
+          center: { lat: 20, lng: 0 },
+          zoom: 3,
           styles: [
             {
               featureType: "all",
@@ -81,152 +130,92 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
             {
               featureType: "water",
               elementType: "geometry",
-              stylers: [{ color: "#e9e9e9" }]
+              stylers: [{ color: "#1a237e" }]
             },
             {
               featureType: "landscape",
               elementType: "geometry",
-              stylers: [{ color: "#f5f5f5" }]
+              stylers: [{ color: "#263238" }]
             }
           ]
         });
 
         mapInstanceRef.current = map;
-        const bounds = new google.maps.LatLngBounds();
-        const geocoder = new google.maps.Geocoder();
-        
-        // Process each region
-        for (const region of fact.regions) {
-          try {
-            await new Promise<void>((resolve, reject) => {
-              // Use coordinates if provided, otherwise geocode
-              if (region.coordinates) {
-                const location = new google.maps.LatLng(
-                  region.coordinates.lat,
-                  region.coordinates.lng
-                );
-                const viewport = new google.maps.LatLngBounds(
-                  new google.maps.LatLng(
-                    region.coordinates.lat - 0.5,
-                    region.coordinates.lng - 0.5
-                  ),
-                  new google.maps.LatLng(
-                    region.coordinates.lat + 0.5,
-                    region.coordinates.lng + 0.5
-                  )
-                );
-                
-                // Create a circular polygon for coordinate-based regions
-                const circle = new google.maps.Circle({
-                  strokeColor: region.color,
-                  strokeOpacity: 0.8,
-                  strokeWeight: 2,
-                  fillColor: region.color,
-                  fillOpacity: 0.35,
-                  center: location,
-                  radius: 50000, // 50km radius
-                  map
-                });
-                
-                polygonsRef.current.push(circle);
-                bounds.union(viewport);
 
-                // Add marker with value label
-                const marker = new google.maps.Marker({
-                  position: location,
-                  map,
-                  label: {
-                    text: `${region.value}`,
-                    color: '#000000',
-                    fontSize: '14px',
-                    fontWeight: 'bold'
-                  },
-                  icon: {
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 0,
-                  }
-                });
-                markersRef.current.push(marker);
-                resolve();
-              } else {
-                geocoder.geocode({ address: region.name }, (results, status) => {
-                  if (status === 'OK' && results && results[0]) {
-                    const result = results[0];
-                    const viewport = result.geometry.viewport;
-                    bounds.union(viewport);
+        // Bias the SearchBox results towards current map's viewport.
+        map.addListener("bounds_changed", () => {
+          searchBox.setBounds(map.getBounds() as google.maps.LatLngBounds);
+        });
 
-                  // Create a polygon for the region
-                  const path = [
-                    { lat: viewport.getNorthEast().lat(), lng: viewport.getNorthEast().lng() },
-                    { lat: viewport.getNorthEast().lat(), lng: viewport.getSouthWest().lng() },
-                    { lat: viewport.getSouthWest().lat(), lng: viewport.getSouthWest().lng() },
-                    { lat: viewport.getSouthWest().lat(), lng: viewport.getNorthEast().lng() }
-                  ];
+        // Listen for the event fired when the user selects a prediction
+        searchBox.addListener("places_changed", () => {
+          const places = searchBox.getPlaces();
+          if (!places || places.length === 0) return;
 
-                  const polygon = new google.maps.Polygon({
-                    paths: path,
-                    strokeColor: region.color,
-                    strokeOpacity: 0.8,
-                    strokeWeight: 2,
-                    fillColor: region.color,
-                    fillOpacity: 0.35,
-                    map
-                  });
+          // For each place, get the location and pan to it
+          places.forEach((place) => {
+            if (!place.geometry || !place.geometry.location) return;
 
-                  polygonsRef.current.push(polygon);
-
-                  // Add click handler
-                  polygon.addListener('click', () => {
-                    // Reset all polygons
-                    polygonsRef.current.forEach(p => {
-                      p.setOptions({
-                        fillOpacity: 0.35,
-                        strokeWeight: 2
-                      });
-                    });
-                    
-                    // Highlight clicked polygon
-                    polygon.setOptions({
-                      fillOpacity: 0.6,
-                      strokeWeight: 3
-                    });
-
-                    fitBoundsWithPadding(map, viewport);
-                  });
-
-                  // Add label
-                  const marker = new google.maps.Marker({
-                    position: result.geometry.location,
-                    map,
-                    label: {
-                      text: `${region.name}\n${region.value}`,
-                      color: '#000000',
-                      fontSize: '12px',
-                      fontWeight: 'bold'
-                    },
-                    icon: {
-                      path: google.maps.SymbolPath.CIRCLE,
-                      scale: 0,
-                    }
-                  });
-                  markersRef.current.push(marker);
-                  resolve();
-                } else {
-                  reject(new Error(`Geocoding failed: ${status}`));
-                }
-              });
+            // Pan to the place
+            if (place.geometry.viewport) {
+              map.fitBounds(place.geometry.viewport);
+            } else {
+              map.setCenter(place.geometry.location);
+              map.setZoom(10);
             }
-          })
-          } catch (error) { 
-            console.error(`Error processing region ${region.name}:`, error);
+          });
+        });
+
+        // Now that map is initialized, fetch location history if we have an access token
+        if (accessToken) {
+          console.log('Loading location history after map init');
+          const history = await getLocationHistory(accessToken);
+          console.log('Location history fetched:', history);
+
+          if (history && history.length) {
+            const locations = history.map(point => 
+              new google.maps.LatLng(point.lat, point.lng)
+            );
+
+            // Focus on most recent location with closer zoom
+            const mostRecent = locations[locations.length - 1];
+            map.setCenter(mostRecent);
+            map.setZoom(13); // Zoom in closer to city level
+
+            // Add a marker for current location
+            new google.maps.Marker({
+              position: mostRecent,
+              map: map,
+              icon: {
+                path: google.maps.SymbolPath.CIRCLE,
+                fillColor: '#4285F4', // Google blue
+                fillOpacity: 1,
+                strokeColor: '#FFFFFF',
+                strokeWeight: 2,
+                scale: 7,
+              },
+              title: 'Current Location'
+            });
+
+            // Update fog mask
+            updateFogMask(locations);
           }
         }
 
-        // Initial view after a short delay to allow features to load
-        setTimeout(() => {
-          fitBoundsWithPadding(map, bounds);
-          onMapReady?.();
-        }, 1000);
+        // Add zoom_changed listener to update fog
+        mapInstanceRef.current?.addListener('zoom_changed', () => {
+          if (accessToken) {
+            getLocationHistory(accessToken).then(history => {
+              if (history && history.length) {
+                const locations = history.map(point => 
+                  new google.maps.LatLng(point.lat, point.lng)
+                );
+                updateFogMask(locations);
+              }
+            });
+          }
+        });
+
       } catch (error) {
         console.error('Error initializing map:', error);
       }
@@ -234,14 +223,12 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
 
     initMap();
 
-    // Cleanup
     return () => {
-      markersRef.current.forEach(marker => marker.setMap(null));
-      markersRef.current = [];
-      polygonsRef.current.forEach(polygon => polygon.setMap(null));
-      polygonsRef.current = [];
+      if (pathRef.current) {
+        pathRef.current.setMap(null);
+      }
     };
-  }, [fact, onMapReady]);
+  }, [isAuthenticated, accessToken]);
 
   if (!process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) {
     return (
@@ -253,209 +240,33 @@ export default function MapVisualizer({ fact, onMapReady }: MapVisualizerProps) 
     );
   }
 
-  return (
-    <div className="relative w-full h-[400px] md:h-[600px] bg-gray-100">
-      <div ref={mapRef} className="absolute inset-0" />
-      <div 
-        className={`absolute transition-all duration-300 ease-in-out
-          ${isInfoExpanded 
-            ? 'top-4 left-4 right-4 bg-white p-3 rounded-lg shadow-lg z-10' 
-            : 'top-4 left-4 right-4 bg-white/90 p-2 rounded-lg shadow-lg z-10 md:bg-white md:p-3 md:right-auto md:max-w-md'
-          }`}
-        onClick={() => setIsInfoExpanded(!isInfoExpanded)}
-      >
-        <div className="flex items-center justify-between md:block">
-          <h2 className="text-lg md:text-xl font-bold truncate">{fact.title}</h2>
-          <button 
-            className="md:hidden"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsInfoExpanded(!isInfoExpanded);
-            }}
-          >
-            {isInfoExpanded ? '▼' : '▲'}
-          </button>
-        </div>
-        <div className={`${isInfoExpanded ? 'block mt-2' : 'hidden md:block md:mt-2'}`}>
-          <p className="text-sm md:text-base text-gray-700 mb-1 md:mb-2">{fact.description}</p>
-          <p className="text-xs md:text-sm text-gray-500 italic">Click on any region to zoom in</p>
-        </div>
+  if (!isAuthenticated) {
+    return (
+      <div className="relative w-full h-screen bg-gray-100 flex flex-col items-center justify-center">
+        <h2 className="text-xl font-bold mb-4">Sign in to explore your world</h2>
+        <GoogleAuth onAuthSuccess={handleAuthSuccess} />
       </div>
-      <button
-        onClick={() => {
-          if (mapInstanceRef.current) {
-            const bounds = new google.maps.LatLngBounds();
-            polygonsRef.current.forEach(polygon => {
-              if (polygon instanceof google.maps.Polygon) {
-                const path = polygon.getPath();
-                path.forEach((latLng: google.maps.LatLng) => {
-                  bounds.extend(latLng);
-                });
-              } else if (polygon instanceof google.maps.Circle) {
-                const center = polygon.getCenter();
-                const radius = polygon.getRadius();
-                if (center) {
-                  const circleBounds = polygon.getBounds();
-                  if (circleBounds) {
-                    bounds.union(circleBounds);
-                  } 
-                }
-              }
-            });
-            // Reset all polygons
-            polygonsRef.current.forEach(polygon => {
-              polygon.setOptions({
-                fillOpacity: 0.35,
-                strokeWeight: 2
-              });
-            });
-            fitBoundsWithPadding(mapInstanceRef.current, bounds);
-          }
-        }}
-        className="absolute bottom-4 right-4 bg-white px-3 py-1.5 md:px-4 md:py-2 text-sm md:text-base rounded-lg shadow-lg z-10 hover:bg-gray-50"
-      >
-        Reset Zoom
-      </button>
-      <button
-        onClick={async () => {
-          if (!mapInstanceRef.current) return;
-          
-          const map = mapInstanceRef.current;
-          const mapCanvas = document.createElement('canvas');
-          const mapDiv = mapRef.current;
-          
-          if (!mapDiv) return;
-          
-          // Set canvas dimensions
-          mapCanvas.width = mapDiv.offsetWidth;
-          mapCanvas.height = mapDiv.offsetHeight;
-          const context = mapCanvas.getContext('2d');
-          
-          if (!context) return;
-          
-          // Create overlay for capturing map content
-          const overlay = new google.maps.OverlayView();
-          overlay.onAdd = () => {};
-          overlay.onRemove = () => {};
-          
-          overlay.draw = () => {
-            const projection = overlay.getProjection();
-            if (!projection) return;
-            
-            // Get map bounds
-            const bounds = map.getBounds();
-            if (!bounds) return;
-            
-            // Convert bounds to canvas coordinates
-            const ne = bounds.getNorthEast();
-            const sw = bounds.getSouthWest();
-            
-            const nePx = projection.fromLatLngToDivPixel(ne);
-            const swPx = projection.fromLatLngToDivPixel(sw);
-            
-            if (!nePx || !swPx) return;
-            
-            // Clear canvas
-            context.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
-            
-            // Draw map tiles
-            const mapTiles = mapDiv.querySelectorAll('canvas');
-            mapTiles.forEach(tile => {
-              if (tile instanceof HTMLCanvasElement) {
-                context.drawImage(
-                  tile,
-                  swPx.x,
-                  swPx.y,
-                  nePx.x - swPx.x,
-                  nePx.y - swPx.y,
-                  0,
-                  0,
-                  mapCanvas.width,
-                  mapCanvas.height
-                );
-              }
-            });
-            
-            // Draw overlays (markers, polygons)
-            markersRef.current.forEach(marker => {
-              const position = marker.getPosition();
-              if (position) {
-                const point = projection.fromLatLngToDivPixel(position);
-                if (point) {
-                  context.fillStyle = '#000000';
-                  context.beginPath();
-                  context.arc(point.x - swPx.x, point.y - swPx.y, 5, 0, 2 * Math.PI);
-                  context.fill();
-                }
-              }
-            });
-            
-            polygonsRef.current.forEach(polygon => {
-              if (polygon instanceof google.maps.Polygon) {
-                const path = polygon.getPath();
-                context.beginPath();
-                path.forEach((latLng: google.maps.LatLng, i: number) => {
-                  const point = projection.fromLatLngToDivPixel(latLng);
-                  if (point) {
-                    if (i === 0) {
-                      context.moveTo(point.x - swPx.x, point.y - swPx.y);
-                    } else {
-                      context.lineTo(point.x - swPx.x, point.y - swPx.y);
-                    }
-                  }
-                });
-                context.closePath();
-                
-                // Apply polygon styles
-                context.strokeStyle = polygon.get('strokeColor') as string;
-                context.lineWidth = polygon.get('strokeWeight') as number;
-                context.fillStyle = polygon.get('fillColor') as string;
-                context.globalAlpha = polygon.get('fillOpacity') as number;
-                context.fill();
-                context.stroke();
-                
-              } else if (polygon instanceof google.maps.Circle) {
-                const center = polygon.getCenter();
-                const radius = polygon.getRadius();
-                if (center) {
-                  context.beginPath();
-                  const centerPoint = projection.fromLatLngToDivPixel(center);
-                  if (centerPoint) {
-                    // Draw circle
-                    context.arc(
-                      centerPoint.x - swPx.x,
-                      centerPoint.y - swPx.y,
-                      radius / 111319.9, // Approximate meters to degrees
-                      0,
-                      2 * Math.PI
-                    );
-                    
-                    // Apply circle styles
-                    context.strokeStyle = polygon.get('strokeColor') as string;
-                    context.lineWidth = polygon.get('strokeWeight') as number;
-                    context.fillStyle = polygon.get('fillColor') as string;
-                    context.globalAlpha = polygon.get('fillOpacity') as number;
-                    context.fill();
-                    context.stroke();
-                  }
-                }
-              }
-            });
-            
-            // Convert to data URL and trigger download
-            const dataUrl = mapCanvas.toDataURL('image/png');
-            const link = document.createElement('a');
-            link.download = `map-${Date.now()}.png`;
-            link.href = dataUrl;
-            link.click();
-          };
-          
-          overlay.setMap(map);
-        }}
-        className="absolute bottom-16 md:bottom-20 right-4 bg-white px-3 py-1.5 md:px-4 md:py-2 text-sm md:text-base rounded-lg shadow-lg z-10 hover:bg-gray-50"
-      >
-        Export Map
-      </button>
+    );
+  }
+
+  const mapContainerStyle = {
+    position: 'relative' as const,
+    width: '100%',
+    height: '100vh', // Full viewport height
+  };
+
+  return (
+    <div className="relative w-full h-screen bg-gray-100">
+      <div ref={mapRef} style={mapContainerStyle} />
+      
+      {/* Search box */}
+      <div className="absolute top-4 left-4 z-10">
+        <input
+          type="text"
+          placeholder="Search places..."
+          className="px-4 py-2 rounded-lg shadow-lg bg-white/90 backdrop-blur-sm w-64"
+        />
+      </div>
     </div>
   );
 }

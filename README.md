@@ -1,36 +1,71 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+ble # World Map Explorer
 
-## Getting Started
+An interactive map application that shows your visited places with a fog of war effect covering unexplored areas. Uses Google Maps Timeline data to reveal places you've been to.
 
-First, run the development server:
+## Features
 
+- Google Sign-In integration
+- Loads your location history from Google Maps Timeline
+- Interactive fog of war effect
+- Search functionality with Places API
+- Dark theme map style
+- Responsive design
+
+## Setup
+
+1. Clone the repository
+2. Install dependencies:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+3. Set up Google Cloud Project:
+   - Go to [Google Cloud Console](https://console.cloud.google.com)
+   - Create a new project or select an existing one
+   - Enable the following APIs:
+     - Maps JavaScript API
+     - Places API
+     - Google Maps Timeline API
+     - OAuth 2.0 API
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+4. Configure OAuth 2.0:
+   - In Google Cloud Console, go to "APIs & Services" > "Credentials"
+   - Click "Create Credentials" > "OAuth client ID"
+   - Select "Web application"
+   - Add authorized JavaScript origins:
+     - `http://localhost:3000` (for development)
+     - Your production domain (if deploying)
+   - Save the Client ID
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+5. Get Maps API Key:
+   - In Google Cloud Console, go to "APIs & Services" > "Credentials"
+   - Click "Create Credentials" > "API Key"
+   - Restrict the API key to:
+     - Maps JavaScript API
+     - Places API
 
-## Learn More
+6. Create `.env.local` file in the project root:
+```
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_maps_api_key_here
+NEXT_PUBLIC_GOOGLE_CLIENT_ID=your_oauth_client_id_here
+```
 
-To learn more about Next.js, take a look at the following resources:
+7. Run the development server:
+```bash
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+8. Open [http://localhost:3000](http://localhost:3000) in your browser
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Usage
 
-## Deploy on Vercel
+1. Sign in with your Google account
+2. The map will automatically load and display your visited places
+3. Use the search box to find specific places
+4. Click anywhere on the map to reveal more areas
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Important Notes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- The application requires access to your Google Maps Timeline data
+- Make sure you have Location History enabled in your Google Account settings
+- The fog of war effect shows areas you've visited with your Google Account's location history
